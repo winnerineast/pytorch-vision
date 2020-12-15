@@ -1,7 +1,7 @@
-from __future__ import print_function
 from PIL import Image
 import os
 import numpy as np
+from typing import Any, Callable, cast, Optional, Tuple
 
 from .utils import download_url
 from .vision import VisionDataset
@@ -9,7 +9,7 @@ from .vision import VisionDataset
 
 class USPS(VisionDataset):
     """`USPS <https://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets/multiclass.html#usps>`_ Dataset.
-    The data-format is : [label [index:value ]*256 \n] * num_lines, where ``label`` lies in ``[1, 10]``.
+    The data-format is : [label [index:value ]*256 \\n] * num_lines, where ``label`` lies in ``[1, 10]``.
     The value for each pixel lies in ``[-1, 1]``. Here we transform the ``label`` into ``[0, 9]``
     and make pixel values in ``[0, 255]``.
 
@@ -37,8 +37,16 @@ class USPS(VisionDataset):
         ],
     }
 
-    def __init__(self, root, train=True, transform=None, target_transform=None, download=False):
-        super(USPS, self).__init__(root, transform=transform, target_transform=target_transform)
+    def __init__(
+            self,
+            root: str,
+            train: bool = True,
+            transform: Optional[Callable] = None,
+            target_transform: Optional[Callable] = None,
+            download: bool = False,
+    ) -> None:
+        super(USPS, self).__init__(root, transform=transform,
+                                   target_transform=target_transform)
         split = 'train' if train else 'test'
         url, filename, checksum = self.split_list[split]
         full_path = os.path.join(self.root, filename)
@@ -48,16 +56,16 @@ class USPS(VisionDataset):
 
         import bz2
         with bz2.open(full_path) as fp:
-            raw_data = [l.decode().split() for l in fp.readlines()]
+            raw_data = [line.decode().split() for line in fp.readlines()]
             imgs = [[x.split(':')[-1] for x in data[1:]] for data in raw_data]
             imgs = np.asarray(imgs, dtype=np.float32).reshape((-1, 16, 16))
-            imgs = ((imgs + 1) / 2 * 255).astype(dtype=np.uint8)
+            imgs = ((cast(np.ndarray, imgs) + 1) / 2 * 255).astype(dtype=np.uint8)
             targets = [int(d[0]) - 1 for d in raw_data]
 
         self.data = imgs
         self.targets = targets
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int) -> Tuple[Any, Any]:
         """
         Args:
             index (int): Index
@@ -79,5 +87,5 @@ class USPS(VisionDataset):
 
         return img, target
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.data)

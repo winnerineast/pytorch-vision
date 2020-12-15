@@ -1,18 +1,34 @@
-#include "ROIAlign.h"
-#include "ROIPool.h"
-#include "nms.h"
+#include "vision.h"
+
+#include <Python.h>
+#include <torch/library.h>
 
 #ifdef WITH_CUDA
 #include <cuda.h>
 #endif
+#ifdef WITH_HIP
+#include <hip/hip_runtime.h>
+#endif
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("nms", &nms, "non-maximum suppression");
-  m.def("roi_align_forward", &ROIAlign_forward, "ROIAlign_forward");
-  m.def("roi_align_backward", &ROIAlign_backward, "ROIAlign_backward");
-  m.def("roi_pool_forward", &ROIPool_forward, "ROIPool_forward");
-  m.def("roi_pool_backward", &ROIPool_backward, "ROIPool_backward");
+// If we are in a Windows environment, we need to define
+// initialization functions for the _custom_ops extension
+#ifdef _WIN32
+PyMODINIT_FUNC PyInit__C(void) {
+  // No need to do anything.
+  return NULL;
+}
+#endif
+
+namespace vision {
+int64_t cuda_version() {
 #ifdef WITH_CUDA
-  m.attr("CUDA_VERSION") = CUDA_VERSION;
+  return CUDA_VERSION;
+#else
+  return -1;
 #endif
 }
+
+TORCH_LIBRARY_FRAGMENT(torchvision, m) {
+  m.def("_cuda_version", &cuda_version);
+}
+} // namespace vision

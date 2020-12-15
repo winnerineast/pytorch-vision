@@ -25,13 +25,13 @@ torch::Tensor channel_shuffle(torch::Tensor x, int64_t groups) {
 
 torch::nn::Conv2d conv11(int64_t input, int64_t output) {
   Options opts(input, output, 1);
-  opts = opts.stride(1).padding(0).with_bias(false);
+  opts = opts.stride(1).padding(0).bias(false);
   return torch::nn::Conv2d(opts);
 }
 
 torch::nn::Conv2d conv33(int64_t input, int64_t output, int64_t stride) {
   Options opts(input, output, 3);
-  opts = opts.stride(stride).padding(1).with_bias(false).groups(input);
+  opts = opts.stride(stride).padding(1).bias(false).groups(input);
   return torch::nn::Conv2d(opts);
 }
 
@@ -41,31 +41,28 @@ struct ShuffleNetV2InvertedResidualImpl : torch::nn::Module {
 
   ShuffleNetV2InvertedResidualImpl(int64_t inp, int64_t oup, int64_t stride)
       : stride(stride) {
-    if (stride < 1 || stride > 3) {
-      std::cerr << "illegal stride value'" << std::endl;
-      assert(false);
-    }
+    TORCH_CHECK(stride >= 1 && stride <= 3, "illegal stride value");
 
     auto branch_features = oup / 2;
-    assert(stride != 1 || inp == branch_features << 1);
+    TORCH_CHECK(stride != 1 || inp == branch_features << 1);
 
     if (stride > 1) {
       branch1 = torch::nn::Sequential(
           conv33(inp, inp, stride),
-          torch::nn::BatchNorm(inp),
+          torch::nn::BatchNorm2d(inp),
           conv11(inp, branch_features),
-          torch::nn::BatchNorm(branch_features),
+          torch::nn::BatchNorm2d(branch_features),
           torch::nn::Functional(modelsimpl::relu_));
     }
 
     branch2 = torch::nn::Sequential(
         conv11(stride > 1 ? inp : branch_features, branch_features),
-        torch::nn::BatchNorm(branch_features),
+        torch::nn::BatchNorm2d(branch_features),
         torch::nn::Functional(modelsimpl::relu_),
         conv33(branch_features, branch_features, stride),
-        torch::nn::BatchNorm(branch_features),
+        torch::nn::BatchNorm2d(branch_features),
         conv11(branch_features, branch_features),
-        torch::nn::BatchNorm(branch_features),
+        torch::nn::BatchNorm2d(branch_features),
         torch::nn::Functional(modelsimpl::relu_));
 
     if (!branch1.is_empty())
@@ -83,7 +80,7 @@ struct ShuffleNetV2InvertedResidualImpl : torch::nn::Module {
     } else
       out = torch::cat({branch1->forward(x), branch2->forward(x)}, 1);
 
-    out = channel_shuffle(out, 2);
+    out = ::vision::models::channel_shuffle(out, 2);
     return out;
   }
 };
@@ -94,17 +91,13 @@ ShuffleNetV2Impl::ShuffleNetV2Impl(
     const std::vector<int64_t>& stage_repeats,
     const std::vector<int64_t>& stage_out_channels,
     int64_t num_classes) {
-  if (stage_repeats.size() != 3) {
-    std::cerr << "expected stage_repeats as vector of 3 positive ints"
-              << std::endl;
-    assert(false);
-  }
+  TORCH_CHECK(
+      stage_repeats.size() == 3,
+      "expected stage_repeats as vector of 3 positive ints");
 
-  if (stage_out_channels.size() != 5) {
-    std::cerr << "expected stage_out_channels as vector of 5 positive ints"
-              << std::endl;
-    assert(false);
-  }
+  TORCH_CHECK(
+      stage_out_channels.size() == 5,
+      "expected stage_out_channels as vector of 5 positive ints");
 
   _stage_out_channels = stage_out_channels;
   int64_t input_channels = 3;
@@ -114,8 +107,8 @@ ShuffleNetV2Impl::ShuffleNetV2Impl(
       torch::nn::Conv2d(Options(input_channels, output_channels, 3)
                             .stride(2)
                             .padding(1)
-                            .with_bias(false)),
-      torch::nn::BatchNorm(output_channels),
+                            .bias(false)),
+      torch::nn::BatchNorm2d(output_channels),
       torch::nn::Functional(modelsimpl::relu_));
 
   input_channels = output_channels;
@@ -141,8 +134,8 @@ ShuffleNetV2Impl::ShuffleNetV2Impl(
       torch::nn::Conv2d(Options(input_channels, output_channels, 1)
                             .stride(1)
                             .padding(0)
-                            .with_bias(false)),
-      torch::nn::BatchNorm(output_channels),
+                            .bias(false)),
+      torch::nn::BatchNorm2d(output_channels),
       torch::nn::Functional(modelsimpl::relu_));
 
   fc = torch::nn::Linear(output_channels, num_classes);

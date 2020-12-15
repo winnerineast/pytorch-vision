@@ -8,17 +8,13 @@ import tarfile
 import gzip
 import warnings
 from torch._utils_internal import get_file_path_2
+from urllib.error import URLError
 
 from common_utils import get_tmp_dir
 
-if sys.version_info < (3,):
-    from urllib2 import URLError
-else:
-    from urllib.error import URLError
-
 
 TEST_FILE = get_file_path_2(
-    os.path.dirname(os.path.abspath(__file__)), 'assets', 'grace_hopper_517x606.jpg')
+    os.path.dirname(os.path.abspath(__file__)), 'assets', 'encode_jpeg', 'grace_hopper_517x606.jpg')
 
 
 class Tester(unittest.TestCase):
@@ -62,13 +58,13 @@ class Tester(unittest.TestCase):
                 warnings.warn(msg, RuntimeWarning)
                 raise unittest.SkipTest(msg)
 
-    @unittest.skipIf(sys.version_info < (3,), "Python2 doesn't raise error")
     def test_download_url_dont_exist(self):
         with get_tmp_dir() as temp_dir:
             url = "http://github.com/pytorch/vision/archive/this_doesnt_exist.zip"
             with self.assertRaises(URLError):
                 utils.download_url(url, temp_dir)
 
+    @unittest.skipIf('win' in sys.platform, 'temporarily disabled on Windows')
     def test_extract_zip(self):
         with get_tmp_dir() as temp_dir:
             with tempfile.NamedTemporaryFile(suffix='.zip') as f:
@@ -80,8 +76,9 @@ class Tester(unittest.TestCase):
                     data = nf.read()
                 self.assertEqual(data, 'this is the content')
 
+    @unittest.skipIf('win' in sys.platform, 'temporarily disabled on Windows')
     def test_extract_tar(self):
-        for ext, mode in zip(['.tar', '.tar.gz'], ['w', 'w:gz']):
+        for ext, mode in zip(['.tar', '.tar.gz', '.tgz'], ['w', 'w:gz', 'w:gz']):
             with get_tmp_dir() as temp_dir:
                 with tempfile.NamedTemporaryFile() as bf:
                     bf.write("this is the content".encode())
@@ -95,6 +92,23 @@ class Tester(unittest.TestCase):
                             data = nf.read()
                         self.assertEqual(data, 'this is the content')
 
+    @unittest.skipIf('win' in sys.platform, 'temporarily disabled on Windows')
+    def test_extract_tar_xz(self):
+        for ext, mode in zip(['.tar.xz'], ['w:xz']):
+            with get_tmp_dir() as temp_dir:
+                with tempfile.NamedTemporaryFile() as bf:
+                    bf.write("this is the content".encode())
+                    bf.seek(0)
+                    with tempfile.NamedTemporaryFile(suffix=ext) as f:
+                        with tarfile.open(f.name, mode=mode) as zf:
+                            zf.add(bf.name, arcname='file.tst')
+                        utils.extract_archive(f.name, temp_dir)
+                        self.assertTrue(os.path.exists(os.path.join(temp_dir, 'file.tst')))
+                        with open(os.path.join(temp_dir, 'file.tst'), 'r') as nf:
+                            data = nf.read()
+                        self.assertEqual(data, 'this is the content')
+
+    @unittest.skipIf('win' in sys.platform, 'temporarily disabled on Windows')
     def test_extract_gzip(self):
         with get_tmp_dir() as temp_dir:
             with tempfile.NamedTemporaryFile(suffix='.gz') as f:
@@ -106,6 +120,11 @@ class Tester(unittest.TestCase):
                 with open(os.path.join(f_name), 'r') as nf:
                     data = nf.read()
                 self.assertEqual(data, 'this is the content')
+
+    def test_verify_str_arg(self):
+        self.assertEqual("a", utils.verify_str_arg("a", "arg", ("a",)))
+        self.assertRaises(ValueError, utils.verify_str_arg, 0, ("a",), "arg")
+        self.assertRaises(ValueError, utils.verify_str_arg, "b", ("a",), "arg")
 
 
 if __name__ == '__main__':

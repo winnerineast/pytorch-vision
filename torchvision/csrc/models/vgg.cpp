@@ -19,7 +19,7 @@ torch::nn::Sequential makeLayers(
           torch::nn::Conv2dOptions(channels, V, 3).padding(1)));
 
       if (batch_norm)
-        seq->push_back(torch::nn::BatchNorm(V));
+        seq->push_back(torch::nn::BatchNorm2d(V));
       seq->push_back(torch::nn::Functional(modelsimpl::relu_));
 
       channels = V;
@@ -35,10 +35,11 @@ void VGGImpl::_initialize_weights() {
       torch::nn::init::kaiming_normal_(
           M->weight,
           /*a=*/0,
-          torch::nn::init::FanMode::FanOut,
-          torch::nn::init::Nonlinearity::ReLU);
+          torch::kFanOut,
+          torch::kReLU);
       torch::nn::init::constant_(M->bias, 0);
-    } else if (auto M = dynamic_cast<torch::nn::BatchNormImpl*>(module.get())) {
+    } else if (
+        auto M = dynamic_cast<torch::nn::BatchNorm2dImpl*>(module.get())) {
       torch::nn::init::constant_(M->weight, 1);
       torch::nn::init::constant_(M->bias, 0);
     } else if (auto M = dynamic_cast<torch::nn::LinearImpl*>(module.get())) {
@@ -49,7 +50,7 @@ void VGGImpl::_initialize_weights() {
 }
 
 VGGImpl::VGGImpl(
-    torch::nn::Sequential features,
+    const torch::nn::Sequential& features,
     int64_t num_classes,
     bool initialize_weights) {
   classifier = torch::nn::Sequential(
@@ -79,7 +80,7 @@ torch::Tensor VGGImpl::forward(torch::Tensor x) {
 }
 
 // clang-format off
-static std::unordered_map<char, std::vector<int>> cfg = {
+static std::unordered_map<char, std::vector<int>> cfgs = {
   {'A', {64, -1, 128, -1, 256, 256, -1, 512, 512, -1, 512, 512, -1}},
   {'B', {64, 64, -1, 128, 128, -1, 256, 256, -1, 512, 512, -1, 512, 512, -1}},
   {'D', {64, 64, -1, 128, 128, -1, 256, 256, 256, -1, 512, 512, 512, -1, 512, 512, 512, -1}},
@@ -87,28 +88,28 @@ static std::unordered_map<char, std::vector<int>> cfg = {
 // clang-format on
 
 VGG11Impl::VGG11Impl(int64_t num_classes, bool initialize_weights)
-    : VGGImpl(makeLayers(cfg['A']), num_classes, initialize_weights) {}
+    : VGGImpl(makeLayers(cfgs['A']), num_classes, initialize_weights) {}
 
 VGG13Impl::VGG13Impl(int64_t num_classes, bool initialize_weights)
-    : VGGImpl(makeLayers(cfg['B']), num_classes, initialize_weights) {}
+    : VGGImpl(makeLayers(cfgs['B']), num_classes, initialize_weights) {}
 
 VGG16Impl::VGG16Impl(int64_t num_classes, bool initialize_weights)
-    : VGGImpl(makeLayers(cfg['D']), num_classes, initialize_weights) {}
+    : VGGImpl(makeLayers(cfgs['D']), num_classes, initialize_weights) {}
 
 VGG19Impl::VGG19Impl(int64_t num_classes, bool initialize_weights)
-    : VGGImpl(makeLayers(cfg['E']), num_classes, initialize_weights) {}
+    : VGGImpl(makeLayers(cfgs['E']), num_classes, initialize_weights) {}
 
 VGG11BNImpl::VGG11BNImpl(int64_t num_classes, bool initialize_weights)
-    : VGGImpl(makeLayers(cfg['A'], true), num_classes, initialize_weights) {}
+    : VGGImpl(makeLayers(cfgs['A'], true), num_classes, initialize_weights) {}
 
 VGG13BNImpl::VGG13BNImpl(int64_t num_classes, bool initialize_weights)
-    : VGGImpl(makeLayers(cfg['B'], true), num_classes, initialize_weights) {}
+    : VGGImpl(makeLayers(cfgs['B'], true), num_classes, initialize_weights) {}
 
 VGG16BNImpl::VGG16BNImpl(int64_t num_classes, bool initialize_weights)
-    : VGGImpl(makeLayers(cfg['D'], true), num_classes, initialize_weights) {}
+    : VGGImpl(makeLayers(cfgs['D'], true), num_classes, initialize_weights) {}
 
 VGG19BNImpl::VGG19BNImpl(int64_t num_classes, bool initialize_weights)
-    : VGGImpl(makeLayers(cfg['E'], true), num_classes, initialize_weights) {}
+    : VGGImpl(makeLayers(cfgs['E'], true), num_classes, initialize_weights) {}
 
 } // namespace models
 } // namespace vision

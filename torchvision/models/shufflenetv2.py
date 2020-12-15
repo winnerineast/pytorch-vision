@@ -1,6 +1,8 @@
 import torch
+from torch import Tensor
 import torch.nn as nn
 from .utils import load_state_dict_from_url
+from typing import Callable, Any, List
 
 
 __all__ = [
@@ -16,8 +18,8 @@ model_urls = {
 }
 
 
-def channel_shuffle(x, groups):
-    batchsize, num_channels, height, width = x.data.size()
+def channel_shuffle(x: Tensor, groups: int) -> Tensor:
+    batchsize, num_channels, height, width = x.size()
     channels_per_group = num_channels // groups
 
     # reshape
@@ -33,7 +35,12 @@ def channel_shuffle(x, groups):
 
 
 class InvertedResidual(nn.Module):
-    def __init__(self, inp, oup, stride):
+    def __init__(
+        self,
+        inp: int,
+        oup: int,
+        stride: int
+    ) -> None:
         super(InvertedResidual, self).__init__()
 
         if not (1 <= stride <= 3):
@@ -51,6 +58,8 @@ class InvertedResidual(nn.Module):
                 nn.BatchNorm2d(branch_features),
                 nn.ReLU(inplace=True),
             )
+        else:
+            self.branch1 = nn.Sequential()
 
         self.branch2 = nn.Sequential(
             nn.Conv2d(inp if (self.stride > 1) else branch_features,
@@ -65,10 +74,17 @@ class InvertedResidual(nn.Module):
         )
 
     @staticmethod
-    def depthwise_conv(i, o, kernel_size, stride=1, padding=0, bias=False):
+    def depthwise_conv(
+        i: int,
+        o: int,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+        bias: bool = False
+    ) -> nn.Conv2d:
         return nn.Conv2d(i, o, kernel_size, stride, padding, bias=bias, groups=i)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         if self.stride == 1:
             x1, x2 = x.chunk(2, dim=1)
             out = torch.cat((x1, self.branch2(x2)), dim=1)
@@ -81,7 +97,13 @@ class InvertedResidual(nn.Module):
 
 
 class ShuffleNetV2(nn.Module):
-    def __init__(self, stages_repeats, stages_out_channels, num_classes=1000):
+    def __init__(
+        self,
+        stages_repeats: List[int],
+        stages_out_channels: List[int],
+        num_classes: int = 1000,
+        inverted_residual: Callable[..., nn.Module] = InvertedResidual
+    ) -> None:
         super(ShuffleNetV2, self).__init__()
 
         if len(stages_repeats) != 3:
@@ -101,12 +123,16 @@ class ShuffleNetV2(nn.Module):
 
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
+        # Static annotations for mypy
+        self.stage2: nn.Sequential
+        self.stage3: nn.Sequential
+        self.stage4: nn.Sequential
         stage_names = ['stage{}'.format(i) for i in [2, 3, 4]]
         for name, repeats, output_channels in zip(
                 stage_names, stages_repeats, self._stage_out_channels[1:]):
-            seq = [InvertedResidual(input_channels, output_channels, 2)]
+            seq = [inverted_residual(input_channels, output_channels, 2)]
             for i in range(repeats - 1):
-                seq.append(InvertedResidual(output_channels, output_channels, 1))
+                seq.append(inverted_residual(output_channels, output_channels, 1))
             setattr(self, name, nn.Sequential(*seq))
             input_channels = output_channels
 
@@ -119,7 +145,8 @@ class ShuffleNetV2(nn.Module):
 
         self.fc = nn.Linear(output_channels, num_classes)
 
-    def forward(self, x):
+    def _forward_impl(self, x: Tensor) -> Tensor:
+        # See note [TorchScript super()]
         x = self.conv1(x)
         x = self.maxpool(x)
         x = self.stage2(x)
@@ -130,8 +157,11 @@ class ShuffleNetV2(nn.Module):
         x = self.fc(x)
         return x
 
+    def forward(self, x: Tensor) -> Tensor:
+        return self._forward_impl(x)
 
-def _shufflenetv2(arch, pretrained, progress, *args, **kwargs):
+
+def _shufflenetv2(arch: str, pretrained: bool, progress: bool, *args: Any, **kwargs: Any) -> ShuffleNetV2:
     model = ShuffleNetV2(*args, **kwargs)
 
     if pretrained:
@@ -145,7 +175,7 @@ def _shufflenetv2(arch, pretrained, progress, *args, **kwargs):
     return model
 
 
-def shufflenet_v2_x0_5(pretrained=False, progress=True, **kwargs):
+def shufflenet_v2_x0_5(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> ShuffleNetV2:
     """
     Constructs a ShuffleNetV2 with 0.5x output channels, as described in
     `"ShuffleNet V2: Practical Guidelines for Efficient CNN Architecture Design"
@@ -159,7 +189,7 @@ def shufflenet_v2_x0_5(pretrained=False, progress=True, **kwargs):
                          [4, 8, 4], [24, 48, 96, 192, 1024], **kwargs)
 
 
-def shufflenet_v2_x1_0(pretrained=False, progress=True, **kwargs):
+def shufflenet_v2_x1_0(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> ShuffleNetV2:
     """
     Constructs a ShuffleNetV2 with 1.0x output channels, as described in
     `"ShuffleNet V2: Practical Guidelines for Efficient CNN Architecture Design"
@@ -173,7 +203,7 @@ def shufflenet_v2_x1_0(pretrained=False, progress=True, **kwargs):
                          [4, 8, 4], [24, 116, 232, 464, 1024], **kwargs)
 
 
-def shufflenet_v2_x1_5(pretrained=False, progress=True, **kwargs):
+def shufflenet_v2_x1_5(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> ShuffleNetV2:
     """
     Constructs a ShuffleNetV2 with 1.5x output channels, as described in
     `"ShuffleNet V2: Practical Guidelines for Efficient CNN Architecture Design"
@@ -187,7 +217,7 @@ def shufflenet_v2_x1_5(pretrained=False, progress=True, **kwargs):
                          [4, 8, 4], [24, 176, 352, 704, 1024], **kwargs)
 
 
-def shufflenet_v2_x2_0(pretrained=False, progress=True, **kwargs):
+def shufflenet_v2_x2_0(pretrained: bool = False, progress: bool = True, **kwargs: Any) -> ShuffleNetV2:
     """
     Constructs a ShuffleNetV2 with 2.0x output channels, as described in
     `"ShuffleNet V2: Practical Guidelines for Efficient CNN Architecture Design"

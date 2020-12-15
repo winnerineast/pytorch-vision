@@ -1,6 +1,5 @@
 #include "squeezenet.h"
 
-#include <limits>
 #include "modelsimpl.h"
 
 namespace vision {
@@ -64,11 +63,12 @@ SqueezeNetImpl::SqueezeNetImpl(double version, int64_t num_classes)
         Fire(384, 48, 192, 192),
         Fire(384, 64, 256, 256),
         Fire(512, 64, 256, 256));
-  } else {
-    std::cerr << "Wrong version number is passed th SqueeseNet constructor!"
-              << std::endl;
-    assert(false);
-  }
+  } else
+    TORCH_CHECK(
+        false,
+        "Unsupported SqueezeNet version ",
+        version,
+        ". 1_0 or 1_1 expected");
 
   // Final convolution is initialized differently from the rest
   auto final_conv =
@@ -90,7 +90,7 @@ SqueezeNetImpl::SqueezeNetImpl(double version, int64_t num_classes)
       else
         torch::nn::init::kaiming_uniform_(M->weight);
 
-      if (M->options.with_bias())
+      if (M->options.bias())
         torch::nn::init::constant_(M->bias, 0);
     }
 }

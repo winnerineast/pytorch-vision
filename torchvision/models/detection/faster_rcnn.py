@@ -7,13 +7,15 @@ import torch.nn.functional as F
 from torchvision.ops import misc as misc_nn_ops
 from torchvision.ops import MultiScaleRoIAlign
 
+from ._utils import overwrite_eps
 from ..utils import load_state_dict_from_url
 
+from .anchor_utils import AnchorGenerator
 from .generalized_rcnn import GeneralizedRCNN
-from .rpn import AnchorGenerator, RPNHead, RegionProposalNetwork
+from .rpn import RPNHead, RegionProposalNetwork
 from .roi_heads import RoIHeads
 from .transform import GeneralizedRCNNTransform
-from .backbone_utils import resnet_fpn_backbone
+from .backbone_utils import resnet_fpn_backbone, _validate_resnet_trainable_layers
 
 
 __all__ = [
@@ -30,11 +32,11 @@ class FasterRCNN(GeneralizedRCNN):
 
     The behavior of the model changes depending if it is in training or evaluation mode.
 
-    During training, the model expects both the input tensors, as well as a targets dictionary,
+    During training, the model expects both the input tensors, as well as a targets (list of dictionary),
     containing:
-        - boxes (Tensor[N, 4]): the ground-truth boxes in [x0, y0, x1, y1] format, with values
-          between 0 and H and 0 and W
-        - labels (Tensor[N]): the class label for each ground-truth box
+        - boxes (FloatTensor[N, 4]): the ground-truth boxes in [x1, y1, x2, y2] format, with values of x
+          between 0 and W and values of y between 0 and H
+        - labels (Int64Tensor[N]): the class label for each ground-truth box
 
     The model returns a Dict[Tensor] during training, containing the classification and regression
     losses for both the RPN and the R-CNN.
@@ -42,9 +44,9 @@ class FasterRCNN(GeneralizedRCNN):
     During inference, the model requires only the input tensors, and returns the post-processed
     predictions as a List[Dict[Tensor]], one for each input image. The fields of the Dict are as
     follows:
-        - boxes (Tensor[N, 4]): the predicted boxes in [x0, y0, x1, y1] format, with values between
-          0 and H and 0 and W
-        - labels (Tensor[N]): the predicted labels for each image
+        - boxes (FloatTensor[N, 4]): the predicted boxes in [x1, y1, x2, y2] format, with values of x
+          between 0 and W and values of y between 0 and H
+        - labels (Int64Tensor[N]): the predicted labels for each image
         - scores (Tensor[N]): the scores or each prediction
 
     Arguments:
@@ -123,10 +125,10 @@ class FasterRCNN(GeneralizedRCNN):
         >>> # use to perform the region of interest cropping, as well as
         >>> # the size of the crop after rescaling.
         >>> # if your backbone returns a Tensor, featmap_names is expected to
-        >>> # be [0]. More generally, the backbone should return an
+        >>> # be ['0']. More generally, the backbone should return an
         >>> # OrderedDict[Tensor], and in featmap_names you can choose which
         >>> # feature maps to use.
-        >>> roi_pooler = torchvision.ops.MultiScaleRoIAlign(featmap_names=[0],
+        >>> roi_pooler = torchvision.ops.MultiScaleRoIAlign(featmap_names=['0'],
         >>>                                                 output_size=7,
         >>>                                                 sampling_ratio=2)
         >>>
@@ -199,7 +201,7 @@ class FasterRCNN(GeneralizedRCNN):
 
         if box_roi_pool is None:
             box_roi_pool = MultiScaleRoIAlign(
-                featmap_names=[0, 1, 2, 3],
+                featmap_names=['0', '1', '2', '3'],
                 output_size=7,
                 sampling_ratio=2)
 
@@ -273,7 +275,7 @@ class FastRCNNPredictor(nn.Module):
         self.bbox_pred = nn.Linear(in_channels, num_classes * 4)
 
     def forward(self, x):
-        if x.ndimension() == 4:
+        if x.dim() == 4:
             assert list(x.shape[2:]) == [1, 1]
         x = x.flatten(start_dim=1)
         scores = self.cls_score(x)
@@ -289,7 +291,7 @@ model_urls = {
 
 
 def fasterrcnn_resnet50_fpn(pretrained=False, progress=True,
-                            num_classes=91, pretrained_backbone=True, **kwargs):
+                            num_classes=91, pretrained_backbone=True, trainable_backbone_layers=None, **kwargs):
     """
     Constructs a Faster R-CNN model with a ResNet-50-FPN backbone.
 
@@ -298,11 +300,11 @@ def fasterrcnn_resnet50_fpn(pretrained=False, progress=True,
 
     The behavior of the model changes depending if it is in training or evaluation mode.
 
-    During training, the model expects both the input tensors, as well as a targets dictionary,
+    During training, the model expects both the input tensors, as well as a targets (list of dictionary),
     containing:
-        - boxes (``Tensor[N, 4]``): the ground-truth boxes in ``[x0, y0, x1, y1]`` format, with values
-          between ``0`` and ``H`` and ``0`` and ``W``
-        - labels (``Tensor[N]``): the class label for each ground-truth box
+        - boxes (``FloatTensor[N, 4]``): the ground-truth boxes in ``[x1, y1, x2, y2]`` format, with values of ``x``
+          between ``0`` and ``W`` and values of ``y`` between ``0`` and ``H``
+        - labels (``Int64Tensor[N]``): the class label for each ground-truth box
 
     The model returns a ``Dict[Tensor]`` during training, containing the classification and regression
     losses for both the RPN and the R-CNN.
@@ -310,29 +312,55 @@ def fasterrcnn_resnet50_fpn(pretrained=False, progress=True,
     During inference, the model requires only the input tensors, and returns the post-processed
     predictions as a ``List[Dict[Tensor]]``, one for each input image. The fields of the ``Dict`` are as
     follows:
-        - boxes (``Tensor[N, 4]``): the predicted boxes in ``[x0, y0, x1, y1]`` format, with values between
-          ``0`` and ``H`` and ``0`` and ``W``
-        - labels (``Tensor[N]``): the predicted labels for each image
+        - boxes (``FloatTensor[N, 4]``): the predicted boxes in ``[x1, y1, x2, y2]`` format, with values of ``x``
+          between ``0`` and ``W`` and values of ``y`` between ``0`` and ``H``
+        - labels (``Int64Tensor[N]``): the predicted labels for each image
         - scores (``Tensor[N]``): the scores or each prediction
+
+    Faster R-CNN is exportable to ONNX for a fixed batch size with inputs images of fixed size.
 
     Example::
 
         >>> model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
+        >>> # For training
+        >>> images, boxes = torch.rand(4, 3, 600, 1200), torch.rand(4, 11, 4)
+        >>> labels = torch.randint(1, 91, (4, 11))
+        >>> images = list(image for image in images)
+        >>> targets = []
+        >>> for i in range(len(images)):
+        >>>     d = {}
+        >>>     d['boxes'] = boxes[i]
+        >>>     d['labels'] = labels[i]
+        >>>     targets.append(d)
+        >>> output = model(images, targets)
+        >>> # For inference
         >>> model.eval()
         >>> x = [torch.rand(3, 300, 400), torch.rand(3, 500, 400)]
         >>> predictions = model(x)
+        >>>
+        >>> # optionally, if you want to export the model to ONNX:
+        >>> torch.onnx.export(model, x, "faster_rcnn.onnx", opset_version = 11)
 
     Arguments:
         pretrained (bool): If True, returns a model pre-trained on COCO train2017
         progress (bool): If True, displays a progress bar of the download to stderr
+        pretrained_backbone (bool): If True, returns a model with backbone pre-trained on Imagenet
+        num_classes (int): number of output classes of the model (including the background)
+        trainable_backbone_layers (int): number of trainable (not frozen) resnet layers starting from final block.
+            Valid values are between 0 and 5, with 5 meaning all backbone layers are trainable.
     """
+    # check default parameters and by default set it to 3 if possible
+    trainable_backbone_layers = _validate_resnet_trainable_layers(
+        pretrained or pretrained_backbone, trainable_backbone_layers)
+
     if pretrained:
         # no need to download the backbone if pretrained is set
         pretrained_backbone = False
-    backbone = resnet_fpn_backbone('resnet50', pretrained_backbone)
+    backbone = resnet_fpn_backbone('resnet50', pretrained_backbone, trainable_layers=trainable_backbone_layers)
     model = FasterRCNN(backbone, num_classes, **kwargs)
     if pretrained:
         state_dict = load_state_dict_from_url(model_urls['fasterrcnn_resnet50_fpn_coco'],
                                               progress=progress)
         model.load_state_dict(state_dict)
+        overwrite_eps(model, 0.0)
     return model

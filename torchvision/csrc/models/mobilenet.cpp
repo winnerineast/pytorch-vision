@@ -6,6 +6,19 @@ namespace vision {
 namespace models {
 using Options = torch::nn::Conv2dOptions;
 
+int64_t make_divisible(
+    double value,
+    int64_t divisor,
+    c10::optional<int64_t> min_value = {}) {
+  if (!min_value.has_value())
+    min_value = divisor;
+  auto new_value = std::max(
+      min_value.value(), (int64_t(value + divisor / 2) / divisor) * divisor);
+  if (new_value < .9 * value)
+    new_value += divisor;
+  return new_value;
+}
+
 struct ConvBNReLUImpl : torch::nn::SequentialImpl {
   ConvBNReLUImpl(
       int64_t in_planes,
@@ -19,8 +32,8 @@ struct ConvBNReLUImpl : torch::nn::SequentialImpl {
                                     .stride(stride)
                                     .padding(padding)
                                     .groups(groups)
-                                    .with_bias(false)));
-    push_back(torch::nn::BatchNorm(out_planes));
+                                    .bias(false)));
+    push_back(torch::nn::BatchNorm2d(out_planes));
     push_back(torch::nn::Functional(modelsimpl::relu6_));
   }
 
@@ -46,7 +59,7 @@ struct MobileNetInvertedResidualImpl : torch::nn::Module {
       return double(std::abs(a - b)) < std::numeric_limits<double>::epsilon();
     };
 
-    assert(stride == 1 || stride == 2);
+    TORCH_CHECK(stride == 1 || stride == 2);
     auto hidden_dim = int64_t(std::round(input * expand_ratio));
 
     if (!double_compare(expand_ratio, 1))
@@ -54,8 +67,8 @@ struct MobileNetInvertedResidualImpl : torch::nn::Module {
 
     conv->push_back(ConvBNReLU(hidden_dim, hidden_dim, 3, stride, hidden_dim));
     conv->push_back(torch::nn::Conv2d(
-        Options(hidden_dim, output, 1).stride(1).padding(0).with_bias(false)));
-    conv->push_back(torch::nn::BatchNorm(output));
+        Options(hidden_dim, output, 1).stride(1).padding(0).bias(false)));
+    conv->push_back(torch::nn::BatchNorm2d(output));
 
     register_module("conv", conv);
   }
@@ -69,28 +82,39 @@ struct MobileNetInvertedResidualImpl : torch::nn::Module {
 
 TORCH_MODULE(MobileNetInvertedResidual);
 
-MobileNetV2Impl::MobileNetV2Impl(int64_t num_classes, double width_mult) {
+MobileNetV2Impl::MobileNetV2Impl(
+    int64_t num_classes,
+    double width_mult,
+    std::vector<std::vector<int64_t>> inverted_residual_settings,
+    int64_t round_nearest) {
   using Block = MobileNetInvertedResidual;
   int64_t input_channel = 32;
   int64_t last_channel = 1280;
 
-  std::vector<std::vector<int64_t>> inverted_residual_settings = {
-      // t, c, n, s
-      {1, 16, 1, 1},
-      {6, 24, 2, 2},
-      {6, 32, 3, 2},
-      {6, 64, 4, 2},
-      {6, 96, 3, 1},
-      {6, 160, 3, 2},
-      {6, 320, 1, 1},
-  };
+  if (inverted_residual_settings.empty())
+    inverted_residual_settings = {
+        // t, c, n, s
+        {1, 16, 1, 1},
+        {6, 24, 2, 2},
+        {6, 32, 3, 2},
+        {6, 64, 4, 2},
+        {6, 96, 3, 1},
+        {6, 160, 3, 2},
+        {6, 320, 1, 1},
+    };
 
-  input_channel = int64_t(input_channel * width_mult);
-  this->last_channel = int64_t(last_channel * std::max(1.0, width_mult));
+  TORCH_CHECK(
+      inverted_residual_settings[0].size() == 4,
+      "inverted_residual_settings should contain 4-element vectors");
+
+  input_channel = make_divisible(input_channel * width_mult, round_nearest);
+  this->last_channel =
+      make_divisible(last_channel * std::max(1.0, width_mult), round_nearest);
   features->push_back(ConvBNReLU(3, input_channel, 3, 2));
 
   for (auto setting : inverted_residual_settings) {
-    auto output_channel = int64_t(setting[1] * width_mult);
+    auto output_channel =
+        make_divisible(setting[1] * width_mult, round_nearest);
 
     for (int64_t i = 0; i < setting[2]; ++i) {
       auto stride = i == 0 ? setting[3] : 1;
@@ -110,11 +134,11 @@ MobileNetV2Impl::MobileNetV2Impl(int64_t num_classes, double width_mult) {
 
   for (auto& module : modules(/*include_self=*/false)) {
     if (auto M = dynamic_cast<torch::nn::Conv2dImpl*>(module.get())) {
-      torch::nn::init::kaiming_normal_(
-          M->weight, 0, torch::nn::init::FanMode::FanOut);
-      if (M->options.with_bias())
+      torch::nn::init::kaiming_normal_(M->weight, 0, torch::kFanOut);
+      if (M->options.bias())
         torch::nn::init::zeros_(M->bias);
-    } else if (auto M = dynamic_cast<torch::nn::BatchNormImpl*>(module.get())) {
+    } else if (
+        auto M = dynamic_cast<torch::nn::BatchNorm2dImpl*>(module.get())) {
       torch::nn::init::ones_(M->weight);
       torch::nn::init::zeros_(M->bias);
     } else if (auto M = dynamic_cast<torch::nn::LinearImpl*>(module.get())) {

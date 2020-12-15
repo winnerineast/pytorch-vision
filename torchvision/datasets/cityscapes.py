@@ -1,7 +1,10 @@
 import json
 import os
 from collections import namedtuple
+import zipfile
+from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 
+from .utils import extract_archive, verify_str_arg, iterable_to_str
 from .vision import VisionDataset
 from PIL import Image
 
@@ -12,9 +15,9 @@ class Cityscapes(VisionDataset):
     Args:
         root (string): Root directory of dataset where directory ``leftImg8bit``
             and ``gtFine`` or ``gtCoarse`` are located.
-        split (string, optional): The image split to use, ``train``, ``test`` or ``val`` if mode="gtFine"
+        split (string, optional): The image split to use, ``train``, ``test`` or ``val`` if mode="fine"
             otherwise ``train``, ``train_extra`` or ``val``
-        mode (string, optional): The quality mode to use, ``gtFine`` or ``gtCoarse``
+        mode (string, optional): The quality mode to use, ``fine`` or ``coarse``
         target_type (string or list, optional): Type of target to use, ``instance``, ``semantic``, ``polygon``
             or ``color``. Can also be a list to output a tuple with all specified target types.
         transform (callable, optional): A function/transform that takes in a PIL image
@@ -96,8 +99,16 @@ class Cityscapes(VisionDataset):
         CityscapesClass('license plate', -1, -1, 'vehicle', 7, False, True, (0, 0, 142)),
     ]
 
-    def __init__(self, root, split='train', mode='fine', target_type='instance',
-                 transform=None, target_transform=None, transforms=None):
+    def __init__(
+            self,
+            root: str,
+            split: str = "train",
+            mode: str = "fine",
+            target_type: Union[List[str], str] = "instance",
+            transform: Optional[Callable] = None,
+            target_transform: Optional[Callable] = None,
+            transforms: Optional[Callable] = None,
+    ) -> None:
         super(Cityscapes, self).__init__(root, transforms, transform, target_transform)
         self.mode = 'gtFine' if mode == 'fine' else 'gtCoarse'
         self.images_dir = os.path.join(self.root, 'leftImg8bit', split)
@@ -107,26 +118,40 @@ class Cityscapes(VisionDataset):
         self.images = []
         self.targets = []
 
-        if mode not in ['fine', 'coarse']:
-            raise ValueError('Invalid mode! Please use mode="fine" or mode="coarse"')
-
-        if mode == 'fine' and split not in ['train', 'test', 'val']:
-            raise ValueError('Invalid split for mode "fine"! Please use split="train", split="test"'
-                             ' or split="val"')
-        elif mode == 'coarse' and split not in ['train', 'train_extra', 'val']:
-            raise ValueError('Invalid split for mode "coarse"! Please use split="train", split="train_extra"'
-                             ' or split="val"')
+        verify_str_arg(mode, "mode", ("fine", "coarse"))
+        if mode == "fine":
+            valid_modes = ("train", "test", "val")
+        else:
+            valid_modes = ("train", "train_extra", "val")
+        msg = ("Unknown value '{}' for argument split if mode is '{}'. "
+               "Valid values are {{{}}}.")
+        msg = msg.format(split, mode, iterable_to_str(valid_modes))
+        verify_str_arg(split, "split", valid_modes, msg)
 
         if not isinstance(target_type, list):
             self.target_type = [target_type]
-
-        if not all(t in ['instance', 'semantic', 'polygon', 'color'] for t in self.target_type):
-            raise ValueError('Invalid value for "target_type"! Valid values are: "instance", "semantic", "polygon"'
-                             ' or "color"')
+        [verify_str_arg(value, "target_type",
+                        ("instance", "semantic", "polygon", "color"))
+         for value in self.target_type]
 
         if not os.path.isdir(self.images_dir) or not os.path.isdir(self.targets_dir):
-            raise RuntimeError('Dataset not found or incomplete. Please make sure all required folders for the'
-                               ' specified "split" and "mode" are inside the "root" directory')
+
+            if split == 'train_extra':
+                image_dir_zip = os.path.join(self.root, 'leftImg8bit{}'.format('_trainextra.zip'))
+            else:
+                image_dir_zip = os.path.join(self.root, 'leftImg8bit{}'.format('_trainvaltest.zip'))
+
+            if self.mode == 'gtFine':
+                target_dir_zip = os.path.join(self.root, '{}{}'.format(self.mode, '_trainvaltest.zip'))
+            elif self.mode == 'gtCoarse':
+                target_dir_zip = os.path.join(self.root, '{}{}'.format(self.mode, '.zip'))
+
+            if os.path.isfile(image_dir_zip) and os.path.isfile(target_dir_zip):
+                extract_archive(from_path=image_dir_zip, to_path=self.root)
+                extract_archive(from_path=target_dir_zip, to_path=self.root)
+            else:
+                raise RuntimeError('Dataset not found or incomplete. Please make sure all required folders for the'
+                                   ' specified "split" and "mode" are inside the "root" directory')
 
         for city in os.listdir(self.images_dir):
             img_dir = os.path.join(self.images_dir, city)
@@ -141,7 +166,7 @@ class Cityscapes(VisionDataset):
                 self.images.append(os.path.join(img_dir, file_name))
                 self.targets.append(target_types)
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int) -> Tuple[Any, Any]:
         """
         Args:
             index (int): Index
@@ -152,7 +177,7 @@ class Cityscapes(VisionDataset):
 
         image = Image.open(self.images[index]).convert('RGB')
 
-        targets = []
+        targets: Any = []
         for i, t in enumerate(self.target_type):
             if t == 'polygon':
                 target = self._load_json(self.targets[index][i])
@@ -168,19 +193,19 @@ class Cityscapes(VisionDataset):
 
         return image, target
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.images)
 
-    def extra_repr(self):
+    def extra_repr(self) -> str:
         lines = ["Split: {split}", "Mode: {mode}", "Type: {target_type}"]
         return '\n'.join(lines).format(**self.__dict__)
 
-    def _load_json(self, path):
+    def _load_json(self, path: str) -> Dict[str, Any]:
         with open(path, 'r') as file:
             data = json.load(file)
         return data
 
-    def _get_target_suffix(self, mode, target_type):
+    def _get_target_suffix(self, mode: str, target_type: str) -> str:
         if target_type == 'instance':
             return '{}_instanceIds.png'.format(mode)
         elif target_type == 'semantic':
